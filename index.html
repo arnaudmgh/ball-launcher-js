@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ball Launcher Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1e1e1e;
+            font-family: Arial, sans-serif;
+            color: white;
+        }
+        #gameCanvas {
+            display: block;
+            margin: 0 auto;
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            line-height: 1.6;
+            pointer-events: none;
+        }
+        #targetCount {
+            pointer-events: auto;
+        }
+        #score {
+            position: absolute;
+            top: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ffff66;
+            font-size: 32px;
+            font-weight: bold;
+            display: none;
+            text-shadow: 2px 2px 4px #000;
+        }
+        #status {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: #888;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="info">
+        <strong>Controls:</strong><br>
+        <span style="color: #ccc">↑/↓</span>: Adjust Velocity<br>
+        <span style="color: #ccc">←/→</span>: Adjust Angle<br>
+        <span style="color: #ccc">Hold SHIFT</span>: Fine Mode<br>
+        <span style="color: #ccc">SPACE</span>: Launch<br>
+        <span style="color: #ccc">R</span>: Retry Same Config<br>
+        <span style="color: #ccc">ESC</span>: Quit (Stop)<br>
+        <br>
+        <strong>Targets:</strong>
+        <select id="targetCount" style="margin-left: 5px; background: #333; color: #fff; border: 1px solid #555; padding: 2px 5px; border-radius: 3px; cursor: pointer;">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+        </select>
+    </div>
+    <div id="score">Score: 0.0</div>
+    <div id="status">Ready</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDiv = document.getElementById('score');
+        const statusDiv = document.getElementById('status');
+        const targetCountSelect = document.getElementById('targetCount');
+
+        // Initial Canvas Setup
+        function resizeBounds() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeBounds();
+        window.addEventListener('resize', resizeBounds);
+
+        // --- Constants ---
+        // We stick to the python logic: 800x600 logical size, scaled up if needed.
+        // But for simplicity in JS, let's just use window coords or fixed logic.
+        // Let's us fixed logic logic but render centered.
+        const LOGICAL_WIDTH = 800;
+        const LOGICAL_HEIGHT = 600;
+        
+        const GRAVITY = 900;
+        const BALL_RADIUS = 10;
+        const MIN_VELOCITY = 100;
+        const MAX_VELOCITY = 1500; // Match python buffer
+        const ELASTICITY = 0.8; // Bounciness of targets
+        
+        // Sim parameters
+        const DT = 1/60; 
+        const SUBSTEPS = 5;
+
+        // --- Parse URL parameter for target count ---
+        function getTargetCount() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const targetsParam = urlParams.get('targets');
+            
+            if (targetsParam !== null) {
+                const num = parseInt(targetsParam, 10);
+                if (!isNaN(num) && num >= 1 && num <= 10) {
+                    return num;
+                }
+            }
+            return 3; // Default
+        }
+
+        let numTargets = getTargetCount();
+
+        // --- State ---
+        let velocity = 500.0;
+        let angle = Math.PI / 4; // 45 deg
+
+        let ball = { x: 0, y: 0, vx: 0, vy: 0 };
+        let targets = []; // {x, y, r, hit, minDist}
+        let targetConfigs = []; // {x, y, r} (for resetting)
+
+        let launched = false;
+        let done = false; 
+        let totalReward = 0;
+        let lastTime = 0;
+        let stepCount = 0;
+        const MAX_STEPS = 500;
+
+        // Keys
+        const keys = {
+            ArrowUp: false, ArrowDown: false, 
+            ArrowLeft: false, ArrowRight: false, 
+            Shift: false, Space: false
+        };
+
+        // --- Audio ---
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+        
+        function playTone(freq) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        const targetFreqs = [261.63, 329.63, 392.00, 440.00, 523.25]; // C, E, G, A, C
+
+        // --- Game Logic ---
+
+        function initTargets() {
+            targetConfigs = [];
+            for(let i=0; i<numTargets; i++) {
+                targetConfigs.push({
+                    x: 100 + Math.random() * (LOGICAL_WIDTH - 200),
+                    y: 100 + Math.random() * (LOGICAL_HEIGHT - 200),
+                    r: 15 + Math.random() * 25
+                });
+            }
+            // Add persistence later if needed, now just random
+            resetLevel(true);
+        }
+
+        function resetLevel(newTargets = false) {
+            if (newTargets) {
+                 // Already handled by initTargets logic mostly, 
+                 // but here we just reset state using existing configs
+            }
+            
+            // Reset ball
+            ball.x = LOGICAL_WIDTH / 2;
+            ball.y = LOGICAL_HEIGHT - 20;
+            ball.vx = 0;
+            ball.vy = 0;
+            
+            // Reset targets from configs
+            targets = targetConfigs.map((cfg, idx) => ({
+                x: cfg.x, y: cfg.y, r: cfg.r,
+                hit: false,
+                minDist: Infinity,
+                id: idx
+            }));
+
+            launched = false;
+            done = false;
+            totalReward = 0;
+            stepCount = 0;
+            scoreDiv.style.display = 'none';
+            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle*180/Math.PI).toFixed(1)}°`;
+        }
+
+        function updatePhysics() {
+            if (!launched || done) return;
+
+            let hitReward = 0;
+
+            for(let s=0; s<SUBSTEPS; s++) {
+                const dt = DT / SUBSTEPS;
+
+                // Update Ball
+                ball.vy += GRAVITY * dt;
+                ball.x += ball.vx * dt;
+                ball.y += ball.vy * dt;
+
+                // Check Targets
+                targets.forEach(t => {
+                    const dx = ball.x - t.x;
+                    const dy = ball.y - t.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    
+                    if (!t.hit && dist < t.minDist) {
+                        t.minDist = dist;
+                    }
+
+                    if (dist < (BALL_RADIUS + t.r)) {
+                        // Game Logic: Score if not hit yet
+                        if (!t.hit) {
+                            t.hit = true;
+                            hitReward += 100;
+                            playTone(targetFreqs[t.id % targetFreqs.length]);
+                        }
+
+                        // Physics: Resolve Collision (Elastic Bounce)
+                        // Normal vector from target center to ball center
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+
+                        // Relative velocity along normal
+                        const vDotN = ball.vx * nx + ball.vy * ny;
+
+                        // Only bounce if moving towards target
+                        if (vDotN < 0) {
+                            const j = -(1 + ELASTICITY) * vDotN;
+                            ball.vx += j * nx;
+                            ball.vy += j * ny;
+
+                            // Positional correction
+                            const overlap = (BALL_RADIUS + t.r) - dist;
+                            ball.x += nx * overlap;
+                            ball.y += ny * overlap;
+                        }
+                    }
+                });
+            }
+
+            stepCount++;
+            totalReward += hitReward;
+
+            // Termination
+            const allHit = targets.every(t => t.hit);
+            const outOfBounds = (ball.x < -200 || ball.x > LOGICAL_WIDTH+200 || ball.y > LOGICAL_HEIGHT + 50);
+            
+            if (allHit || outOfBounds || stepCount >= MAX_STEPS) {
+                finishEpisode(allHit);
+            }
+        }
+
+        function finishEpisode(allHit) {
+            done = true;
+            if (allHit) totalReward += 200;
+
+            // Shaped reward
+            targets.forEach(t => {
+                if (!t.hit) {
+                     // 20 * exp(-dist/50)
+                     const r = 20.0 * Math.exp(-t.minDist / 50.0);
+                     totalReward += r;
+                }
+            });
+
+            scoreDiv.textContent = `Score: ${totalReward.toFixed(1)}`;
+            scoreDiv.style.display = 'block';
+
+            // Auto Reset
+            setTimeout(() => {
+                if (done) resetLevel(false); // Retry same config
+            }, 1500);
+        }
+
+        function handleInput() {
+            if (launched) return;
+
+            const shift = keys.Shift;
+            const vStep = shift ? 1.0 : 10.0;
+            const aStep = shift ? 0.002 : 0.01;
+
+            if (keys.ArrowUp) velocity = Math.min(MAX_VELOCITY, velocity + vStep);
+            if (keys.ArrowDown) velocity = Math.max(MIN_VELOCITY, velocity - vStep);
+            
+            if (keys.ArrowLeft) angle = Math.min(Math.PI - 0.1, angle + aStep);
+            if (keys.ArrowRight) angle = Math.max(0.1, angle - aStep);
+
+            // Update UI text immediately
+            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle*180/Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
+        }
+
+        // --- Render ---
+        function render() {
+            // Fill background
+            ctx.fillStyle = "#1e1e1e"; // Canvas bg
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Centering logic: Draw logical 800x600 in center of window
+            ctx.save();
+            const scale = Math.min(canvas.width / LOGICAL_WIDTH, canvas.height / LOGICAL_HEIGHT) * 0.9;
+            const tx = (canvas.width - LOGICAL_WIDTH * scale) / 2;
+            const ty = (canvas.height - LOGICAL_HEIGHT * scale) / 2;
+            
+            ctx.translate(tx, ty);
+            ctx.scale(scale, scale);
+
+            // Draw Bounds (optional, helps see the arena)
+            ctx.strokeStyle = "#333";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+            // Draw Targets
+            targets.forEach(t => {
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, t.r, 0, Math.PI*2);
+                if (t.hit) {
+                    ctx.fillStyle = "#555";
+                    ctx.fill();
+                } else {
+                    ctx.strokeStyle = "#ff6464"; // Reddish
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+            });
+
+            // Draw Ball
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI*2);
+            ctx.fillStyle = "#fff";
+            ctx.fill();
+
+            // Draw Arrow (if aiming)
+            if (!launched) {
+                const arrowLen = velocity * 0.15;
+                const endX = ball.x + arrowLen * Math.cos(angle);
+                const endY = ball.y - arrowLen * Math.sin(angle); // Screen Y is down, so minus
+
+                ctx.beginPath();
+                ctx.moveTo(ball.x, ball.y);
+                ctx.lineTo(endX, endY);
+                ctx.strokeStyle = keys.Shift ? "#ffc864" : "#64ff64"; // Orange/Green
+                ctx.lineWidth = 4;
+                ctx.stroke();
+
+                // Arrowhead
+                const headLen = 15;
+                const headAngle = 0.5;
+                const angleRad = -angle; // visual angle
+                
+                // Manual geometry for arrowhead
+                // Vector d = (endX - startX, endY - startY) normalized
+                const dx = endX - ball.x;
+                const dy = endY - ball.y;
+                const len = Math.sqrt(dx*dx + dy*dy);
+                const udx = dx/len; 
+                const udy = dy/len;
+
+                // Rotate u by +headAngle and -headAngle
+                // x' = x cos - y sin
+                // y' = x sin + y cos
+                const cosA = Math.cos(headAngle);
+                const sinA = Math.sin(headAngle);
+
+                // Left wing
+                const lx = endX - headLen * (udx * cosA - udy * sinA);
+                const ly = endY - headLen * (udx * sinA + udy * cosA);
+                
+                // Right wing
+                const rx = endX - headLen * (udx * cosA + udy * sinA);
+                const ry = endY - headLen * (udx * -sinA + udy * cosA);
+
+                ctx.beginPath();
+                ctx.moveTo(endX, endY);
+                ctx.lineTo(lx, ly);
+                ctx.lineTo(rx, ry);
+                ctx.fillStyle = keys.Shift ? "#ffc864" : "#64ff64";
+                ctx.fill();
+            }
+
+            ctx.restore();
+        }
+
+        // --- Loop ---
+        function loop(timestamp) {
+            handleInput();
+            updatePhysics();
+            render();
+            requestAnimationFrame(loop);
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('keydown', e => {
+            if (e.code === 'ArrowUp') keys.ArrowUp = true;
+            if (e.code === 'ArrowDown') keys.ArrowDown = true;
+            if (e.code === 'ArrowLeft') keys.ArrowLeft = true;
+            if (e.code === 'ArrowRight') keys.ArrowRight = true;
+            if (e.key === 'Shift') keys.Shift = true;
+            
+            if (e.code === 'Space' && !keys.Space) {
+                keys.Space = true;
+                if (!launched && !done) {
+                    ball.vx = velocity * Math.cos(angle);
+                    ball.vy = -velocity * Math.sin(angle);
+                    launched = true;
+                } else {
+                    resetLevel(false);
+                }
+            }
+
+            if (e.code === 'KeyR') {
+                resetLevel(false);
+            }
+            if (e.code === 'KeyQ' || e.code === 'Escape') {
+                // Just reload new randomness
+                initTargets();
+            }
+        });
+
+        window.addEventListener('keyup', e => {
+            if (e.code === 'ArrowUp') keys.ArrowUp = false;
+            if (e.code === 'ArrowDown') keys.ArrowDown = false;
+            if (e.code === 'ArrowLeft') keys.ArrowLeft = false;
+            if (e.code === 'ArrowRight') keys.ArrowRight = false;
+            if (e.key === 'Shift') keys.Shift = false;
+            if (e.code === 'Space') keys.Space = false;
+        });
+
+        // Sync dropdown with initial value
+        targetCountSelect.value = numTargets;
+
+        // Dropdown change event
+        targetCountSelect.addEventListener('change', (e) => {
+            numTargets = parseInt(e.target.value, 10);
+            initTargets();
+            e.target.blur(); // Remove focus so space bar works for launching
+        });
+
+        // Start
+        initTargets();
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>
