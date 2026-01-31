@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,12 +13,14 @@
             font-family: Arial, sans-serif;
             color: white;
         }
+
         #gameCanvas {
             display: block;
             margin: 0 auto;
             background-color: #1e1e1e;
             border: 1px solid #333;
         }
+
         #info {
             position: absolute;
             top: 10px;
@@ -29,9 +32,12 @@
             line-height: 1.6;
             pointer-events: none;
         }
-        #targetCount {
+
+        #targetCount,
+        #cemBtn {
             pointer-events: auto;
         }
+
         #score {
             position: absolute;
             top: 100px;
@@ -43,6 +49,7 @@
             display: none;
             text-shadow: 2px 2px 4px #000;
         }
+
         #status {
             position: absolute;
             bottom: 20px;
@@ -52,6 +59,7 @@
         }
     </style>
 </head>
+
 <body>
     <canvas id="gameCanvas"></canvas>
     <div id="info">
@@ -64,7 +72,8 @@
         <span style="color: #ccc">ESC</span>: Quit (Stop)<br>
         <br>
         <strong>Targets:</strong>
-        <select id="targetCount" style="margin-left: 5px; background: #333; color: #fff; border: 1px solid #555; padding: 2px 5px; border-radius: 3px; cursor: pointer;">
+        <select id="targetCount"
+            style="margin-left: 5px; background: #333; color: #fff; border: 1px solid #555; padding: 2px 5px; border-radius: 3px; cursor: pointer;">
             <option value="1">1</option>
             <option value="2">2</option>
             <option value="3" selected>3</option>
@@ -76,6 +85,9 @@
             <option value="9">9</option>
             <option value="10">10</option>
         </select>
+        <button id="cemBtn"
+            style="margin-top: 10px; display: block; width: 100%; background: #4477aa; color: #fff; border: none; padding: 8px; border-radius: 3px; cursor: pointer; font-weight: bold;">AI:
+            Generate Solution</button>
     </div>
     <div id="score">Score: 0.0</div>
     <div id="status">Ready</div>
@@ -101,22 +113,22 @@
         // Let's us fixed logic logic but render centered.
         const LOGICAL_WIDTH = 800;
         const LOGICAL_HEIGHT = 600;
-        
+
         const GRAVITY = 900;
         const BALL_RADIUS = 10;
         const MIN_VELOCITY = 100;
         const MAX_VELOCITY = 1500; // Match python buffer
         const ELASTICITY = 0.8; // Bounciness of targets
-        
+
         // Sim parameters
-        const DT = 1/60; 
+        const DT = 1 / 60;
         const SUBSTEPS = 5;
 
         // --- Parse URL parameter for target count ---
         function getTargetCount() {
             const urlParams = new URLSearchParams(window.location.search);
             const targetsParam = urlParams.get('targets');
-            
+
             if (targetsParam !== null) {
                 const num = parseInt(targetsParam, 10);
                 if (!isNaN(num) && num >= 1 && num <= 10) {
@@ -137,23 +149,24 @@
         let targetConfigs = []; // {x, y, r} (for resetting)
 
         let launched = false;
-        let done = false; 
+        let done = false;
         let totalReward = 0;
         let lastTime = 0;
         let stepCount = 0;
+        let aiSolutionReady = false;
         const MAX_STEPS = 500;
 
         // Keys
         const keys = {
-            ArrowUp: false, ArrowDown: false, 
-            ArrowLeft: false, ArrowRight: false, 
+            ArrowUp: false, ArrowDown: false,
+            ArrowLeft: false, ArrowRight: false,
             Shift: false, Space: false
         };
 
         // --- Audio ---
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContext();
-        
+
         function playTone(freq) {
             if (audioCtx.state === 'suspended') audioCtx.resume();
             const osc = audioCtx.createOscillator();
@@ -174,7 +187,7 @@
 
         function initTargets() {
             targetConfigs = [];
-            for(let i=0; i<numTargets; i++) {
+            for (let i = 0; i < numTargets; i++) {
                 targetConfigs.push({
                     x: 100 + Math.random() * (LOGICAL_WIDTH - 200),
                     y: 100 + Math.random() * (LOGICAL_HEIGHT - 200),
@@ -187,16 +200,16 @@
 
         function resetLevel(newTargets = false) {
             if (newTargets) {
-                 // Already handled by initTargets logic mostly, 
-                 // but here we just reset state using existing configs
+                // Already handled by initTargets logic mostly, 
+                // but here we just reset state using existing configs
             }
-            
+
             // Reset ball
             ball.x = LOGICAL_WIDTH / 2;
             ball.y = LOGICAL_HEIGHT - 20;
             ball.vx = 0;
             ball.vy = 0;
-            
+
             // Reset targets from configs
             targets = targetConfigs.map((cfg, idx) => ({
                 x: cfg.x, y: cfg.y, r: cfg.r,
@@ -210,7 +223,7 @@
             totalReward = 0;
             stepCount = 0;
             scoreDiv.style.display = 'none';
-            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle*180/Math.PI).toFixed(1)}°`;
+            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}°`;
         }
 
         function updatePhysics() {
@@ -218,7 +231,7 @@
 
             let hitReward = 0;
 
-            for(let s=0; s<SUBSTEPS; s++) {
+            for (let s = 0; s < SUBSTEPS; s++) {
                 const dt = DT / SUBSTEPS;
 
                 // Update Ball
@@ -230,8 +243,8 @@
                 targets.forEach(t => {
                     const dx = ball.x - t.x;
                     const dy = ball.y - t.y;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
                     if (!t.hit && dist < t.minDist) {
                         t.minDist = dist;
                     }
@@ -272,8 +285,8 @@
 
             // Termination
             const allHit = targets.every(t => t.hit);
-            const outOfBounds = (ball.x < -200 || ball.x > LOGICAL_WIDTH+200 || ball.y > LOGICAL_HEIGHT + 50);
-            
+            const outOfBounds = (ball.x < -200 || ball.x > LOGICAL_WIDTH + 200 || ball.y > LOGICAL_HEIGHT + 50);
+
             if (allHit || outOfBounds || stepCount >= MAX_STEPS) {
                 finishEpisode(allHit);
             }
@@ -286,9 +299,9 @@
             // Shaped reward
             targets.forEach(t => {
                 if (!t.hit) {
-                     // 20 * exp(-dist/50)
-                     const r = 20.0 * Math.exp(-t.minDist / 50.0);
-                     totalReward += r;
+                    // 20 * exp(-dist/50)
+                    const r = 20.0 * Math.exp(-t.minDist / 50.0);
+                    totalReward += r;
                 }
             });
 
@@ -308,14 +321,16 @@
             const vStep = shift ? 1.0 : 10.0;
             const aStep = shift ? 0.002 : 0.01;
 
-            if (keys.ArrowUp) velocity = Math.min(MAX_VELOCITY, velocity + vStep);
-            if (keys.ArrowDown) velocity = Math.max(MIN_VELOCITY, velocity - vStep);
-            
-            if (keys.ArrowLeft) angle = Math.min(Math.PI - 0.1, angle + aStep);
-            if (keys.ArrowRight) angle = Math.max(0.1, angle - aStep);
+            if (keys.ArrowUp) { velocity = Math.min(MAX_VELOCITY, velocity + vStep); aiSolutionReady = false; }
+            if (keys.ArrowDown) { velocity = Math.max(MIN_VELOCITY, velocity - vStep); aiSolutionReady = false; }
+
+            if (keys.ArrowLeft) { angle = Math.min(Math.PI - 0.1, angle + aStep); aiSolutionReady = false; }
+            if (keys.ArrowRight) { angle = Math.max(0.1, angle - aStep); aiSolutionReady = false; }
 
             // Update UI text immediately
-            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle*180/Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
+            if (!aiSolutionReady) {
+                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
+            }
         }
 
         // --- Render ---
@@ -329,7 +344,7 @@
             const scale = Math.min(canvas.width / LOGICAL_WIDTH, canvas.height / LOGICAL_HEIGHT) * 0.9;
             const tx = (canvas.width - LOGICAL_WIDTH * scale) / 2;
             const ty = (canvas.height - LOGICAL_HEIGHT * scale) / 2;
-            
+
             ctx.translate(tx, ty);
             ctx.scale(scale, scale);
 
@@ -341,7 +356,7 @@
             // Draw Targets
             targets.forEach(t => {
                 ctx.beginPath();
-                ctx.arc(t.x, t.y, t.r, 0, Math.PI*2);
+                ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
                 if (t.hit) {
                     ctx.fillStyle = "#555";
                     ctx.fill();
@@ -354,7 +369,7 @@
 
             // Draw Ball
             ctx.beginPath();
-            ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI*2);
+            ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
             ctx.fillStyle = "#fff";
             ctx.fill();
 
@@ -375,14 +390,14 @@
                 const headLen = 15;
                 const headAngle = 0.5;
                 const angleRad = -angle; // visual angle
-                
+
                 // Manual geometry for arrowhead
                 // Vector d = (endX - startX, endY - startY) normalized
                 const dx = endX - ball.x;
                 const dy = endY - ball.y;
-                const len = Math.sqrt(dx*dx + dy*dy);
-                const udx = dx/len; 
-                const udy = dy/len;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                const udx = dx / len;
+                const udy = dy / len;
 
                 // Rotate u by +headAngle and -headAngle
                 // x' = x cos - y sin
@@ -393,7 +408,7 @@
                 // Left wing
                 const lx = endX - headLen * (udx * cosA - udy * sinA);
                 const ly = endY - headLen * (udx * sinA + udy * cosA);
-                
+
                 // Right wing
                 const rx = endX - headLen * (udx * cosA + udy * sinA);
                 const ry = endY - headLen * (udx * -sinA + udy * cosA);
@@ -424,7 +439,7 @@
             if (e.code === 'ArrowLeft') keys.ArrowLeft = true;
             if (e.code === 'ArrowRight') keys.ArrowRight = true;
             if (e.key === 'Shift') keys.Shift = true;
-            
+
             if (e.code === 'Space' && !keys.Space) {
                 keys.Space = true;
                 if (!launched && !done) {
@@ -464,10 +479,126 @@
             e.target.blur(); // Remove focus so space bar works for launching
         });
 
+        // --- CEM Logic ---
+        function simulate(v, a, targetConfigs) {
+            let b = { x: LOGICAL_WIDTH / 2, y: LOGICAL_HEIGHT - 20, vx: v * Math.cos(a), vy: -v * Math.sin(a) };
+            let tgs = targetConfigs.map(cfg => ({ x: cfg.x, y: cfg.y, r: cfg.r, hit: false, minDist: Infinity }));
+            let sc = 0;
+            let tr = 0;
+
+            while (sc < MAX_STEPS) {
+                for (let s = 0; s < SUBSTEPS; s++) {
+                    const dt = DT / SUBSTEPS;
+                    b.vy += GRAVITY * dt;
+                    b.x += b.vx * dt;
+                    b.y += b.vy * dt;
+
+                    for (let t of tgs) {
+                        const dx = b.x - t.x;
+                        const dy = b.y - t.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (!t.hit && dist < t.minDist) t.minDist = dist;
+                        if (dist < (BALL_RADIUS + t.r)) {
+                            if (!t.hit) {
+                                t.hit = true;
+                                tr += 100;
+                            }
+                            const nx = dx / dist;
+                            const ny = dy / dist;
+                            const vDotN = b.vx * nx + b.vy * ny;
+                            if (vDotN < 0) {
+                                const j = -(1 + ELASTICITY) * vDotN;
+                                b.vx += j * nx;
+                                b.vy += j * ny;
+                                const overlap = (BALL_RADIUS + t.r) - dist;
+                                b.x += nx * overlap;
+                                b.y += ny * overlap;
+                            }
+                        }
+                    }
+                }
+                sc++;
+                if (tgs.every(t => t.hit)) {
+                    tr += 200;
+                    break;
+                }
+                if (b.x < -200 || b.x > LOGICAL_WIDTH + 200 || b.y > LOGICAL_HEIGHT + 50) break;
+            }
+
+            tgs.forEach(t => {
+                if (!t.hit) tr += 20.0 * Math.exp(-t.minDist / 50.0);
+            });
+            return tr;
+        }
+
+        function runCEM() {
+            statusDiv.textContent = "AI thinking...";
+            const popSize = 100;
+            const eliteFrac = 0.1;
+            const iterations = 40;
+
+            let meanV = velocity;
+            let meanA = angle;
+            let stdV = 300;
+            let stdA = 0.4;
+
+            const configs = targets.map(t => ({ x: t.x, y: t.y, r: t.r }));
+            let bestR = -Infinity;
+            let bestV = meanV, bestA = meanA;
+
+            function gaussianRandom(mean, std) {
+                const u1 = Math.random(), u2 = Math.random();
+                const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+                return z0 * std + mean;
+            }
+
+            for (let i = 0; i < iterations; i++) {
+                let samples = [];
+                for (let p = 0; p < popSize; p++) {
+                    let v = gaussianRandom(meanV, stdV);
+                    let a = gaussianRandom(meanA, stdA);
+                    v = Math.max(MIN_VELOCITY, Math.min(MAX_VELOCITY, v));
+                    a = Math.max(0.1, Math.min(Math.PI - 0.1, a));
+                    let r = simulate(v, a, configs);
+                    samples.push({ v, a, r });
+                }
+
+                samples.sort((a, b) => b.r - a.r);
+                const elites = samples.slice(0, Math.floor(popSize * eliteFrac));
+
+                if (elites[0].r > bestR) {
+                    bestR = elites[0].r;
+                    bestV = elites[0].v;
+                    bestA = elites[0].a;
+                }
+
+                let sumV = 0, sumA = 0;
+                elites.forEach(e => { sumV += e.v; sumA += e.a; });
+                meanV = sumV / elites.length;
+                meanA = sumA / elites.length;
+
+                let varV = 0, varA = 0;
+                elites.forEach(e => {
+                    varV += Math.pow(e.v - meanV, 2);
+                    varA += Math.pow(e.a - meanA, 2);
+                });
+                stdV = Math.sqrt(varV / elites.length) + 1;
+                stdA = Math.sqrt(varA / elites.length) + 0.01;
+            }
+
+            velocity = bestV;
+            angle = bestA;
+            aiSolutionReady = true;
+            statusDiv.textContent = `AI Solution: Vel ${velocity.toFixed(1)} | Ang ${(angle * 180 / Math.PI).toFixed(1)}° | Score ${bestR.toFixed(1)}`;
+        }
+
+        document.getElementById('cemBtn').addEventListener('click', runCEM);
+
         // Start
         initTargets();
         requestAnimationFrame(loop);
 
     </script>
 </body>
+
 </html>
