@@ -86,8 +86,8 @@
             <option value="10">10</option>
         </select>
         <button id="cemBtn"
-            style="margin-top: 10px; display: block; width: 100%; background: #4477aa; color: #fff; border: none; padding: 8px; border-radius: 3px; cursor: pointer; font-weight: bold;">AI:
-            Generate Solution</button>
+            style="margin-top: 10px; display: block; width: 100%; background: #4477aa; color: #fff; border: none; padding: 8px; border-radius: 3px; cursor: pointer; font-weight: bold;">Generate
+            Solution</button>
     </div>
     <div id="score">Score: 0.0</div>
     <div id="status">Ready</div>
@@ -153,7 +153,6 @@
         let totalReward = 0;
         let lastTime = 0;
         let stepCount = 0;
-        let aiSolutionReady = false;
         const MAX_STEPS = 500;
 
         // Keys
@@ -321,16 +320,14 @@
             const vStep = shift ? 1.0 : 10.0;
             const aStep = shift ? 0.002 : 0.01;
 
-            if (keys.ArrowUp) { velocity = Math.min(MAX_VELOCITY, velocity + vStep); aiSolutionReady = false; }
-            if (keys.ArrowDown) { velocity = Math.max(MIN_VELOCITY, velocity - vStep); aiSolutionReady = false; }
+            if (keys.ArrowUp) velocity = Math.min(MAX_VELOCITY, velocity + vStep);
+            if (keys.ArrowDown) velocity = Math.max(MIN_VELOCITY, velocity - vStep);
 
-            if (keys.ArrowLeft) { angle = Math.min(Math.PI - 0.1, angle + aStep); aiSolutionReady = false; }
-            if (keys.ArrowRight) { angle = Math.max(0.1, angle - aStep); aiSolutionReady = false; }
+            if (keys.ArrowLeft) angle = Math.min(Math.PI - 0.1, angle + aStep);
+            if (keys.ArrowRight) angle = Math.max(0.1, angle - aStep);
 
             // Update UI text immediately
-            if (!aiSolutionReady) {
-                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
-            }
+            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
         }
 
         // --- Render ---
@@ -474,9 +471,10 @@
 
         // Dropdown change event
         targetCountSelect.addEventListener('change', (e) => {
-            numTargets = parseInt(e.target.value, 10);
-            initTargets();
-            e.target.blur(); // Remove focus so space bar works for launching
+            const count = parseInt(e.target.value, 10);
+            const url = new URL(window.location.href);
+            url.searchParams.set('targets', count);
+            window.location.href = url.href;
         });
 
         // --- CEM Logic ---
@@ -588,11 +586,13 @@
 
             velocity = bestV;
             angle = bestA;
-            aiSolutionReady = true;
             statusDiv.textContent = `AI Solution: Vel ${velocity.toFixed(1)} | Ang ${(angle * 180 / Math.PI).toFixed(1)}° | Score ${bestR.toFixed(1)}`;
         }
 
-        document.getElementById('cemBtn').addEventListener('click', runCEM);
+        document.getElementById('cemBtn').addEventListener('click', (e) => {
+            runCEM();
+            e.target.blur();
+        });
 
         // Start
         initTargets();
