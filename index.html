@@ -294,7 +294,7 @@
             const allHit = targets.every(t => t.hit);
             const outOfBounds = (ball.x < -200 || ball.x > LOGICAL_WIDTH + 200 || ball.y > LOGICAL_HEIGHT + 50);
 
-            if (allHit || outOfBounds || stepCount >= MAX_STEPS) {
+            if (outOfBounds || stepCount >= MAX_STEPS) {
                 finishEpisode(allHit);
             }
         }
