@@ -67,7 +67,8 @@
         <strong>Controls:</strong><br>
         <span style="color: #ccc">↑/↓</span>: Adjust Velocity<br>
         <span style="color: #ccc">←/→</span>: Adjust Angle<br>
-        <span style="color: #ccc">Hold SHIFT</span>: Fine Mode<br>
+        <span style="color: #ccc">1/2/3/4</span>: Precision Mode<br>
+        <span style="color: #ccc">Hold SHIFT</span>: Boost Precision<br>
         <span style="color: #ccc">SPACE</span>: Launch<br>
         <span style="color: #ccc">R</span>: Retry Same Config<br>
         <span style="color: #ccc">ESC</span>: Quit (Stop)<br>
@@ -156,6 +157,12 @@
         let aiSolutionActive = false;
         const MAX_STEPS = 500;
 
+        // Precision control system
+        let precisionLevel = 1; // 1-4
+        const PRECISION_NAMES = ["NORMAL", "FINE", "ULTRA-FINE", "DID-IT-EVEN-MOVE"];
+        const VELOCITY_STEPS = [10, 2, 0.5, 0.1];
+        const ANGLE_STEPS = [0.01, 0.002, 0.0005, 0.0001];
+
         // Keys
         const keys = {
             ArrowUp: false, ArrowDown: false,
@@ -224,7 +231,8 @@
             stepCount = 0;
             scoreDiv.style.display = 'none';
             if (!aiSolutionActive) {
-                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}°`;
+                const precisionName = PRECISION_NAMES[precisionLevel - 1];
+                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° | Precision: ${precisionName}`;
             }
         }
 
@@ -320,8 +328,10 @@
             if (launched) return;
 
             const shift = keys.Shift;
-            const vStep = shift ? 1.0 : 10.0;
-            const aStep = shift ? 0.002 : 0.01;
+            // Get current precision level, boost by 1 if shift is held (max 4)
+            const effectiveLevel = shift ? Math.min(precisionLevel + 1, 4) : precisionLevel;
+            const vStep = VELOCITY_STEPS[effectiveLevel - 1];
+            const aStep = ANGLE_STEPS[effectiveLevel - 1];
 
             if (keys.ArrowUp) { velocity = Math.min(MAX_VELOCITY, velocity + vStep); aiSolutionActive = false; }
             if (keys.ArrowDown) { velocity = Math.max(MIN_VELOCITY, velocity - vStep); aiSolutionActive = false; }
@@ -331,7 +341,9 @@
 
             // Update UI text immediately
             if (!aiSolutionActive) {
-                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
+                const precisionName = PRECISION_NAMES[precisionLevel - 1];
+                const boostText = shift && precisionLevel < 4 ? ` [⇧ ${PRECISION_NAMES[effectiveLevel - 1]}]` : '';
+                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° | Precision: ${precisionName}${boostText}`;
             }
         }
 
@@ -462,6 +474,14 @@
             if (e.code === 'ArrowLeft') keys.ArrowLeft = true;
             if (e.code === 'ArrowRight') keys.ArrowRight = true;
             if (e.key === 'Shift') keys.Shift = true;
+
+            // Precision mode switching (only when not launched)
+            if (!launched) {
+                if (e.code === 'Digit1') precisionLevel = 1;
+                if (e.code === 'Digit2') precisionLevel = 2;
+                if (e.code === 'Digit3') precisionLevel = 3;
+                if (e.code === 'Digit4') precisionLevel = 4;
+            }
 
             if (e.code === 'Space' && !keys.Space) {
                 keys.Space = true;
