@@ -264,7 +264,6 @@
                         if (!t.hit) {
                             t.hit = true;
                             hitReward += 100;
-                            playTone(targetFreqs[t.id % targetFreqs.length]);
                         }
 
                         // Physics: Resolve Collision (Elastic Bounce)
@@ -277,6 +276,9 @@
 
                         // Only bounce if moving towards target
                         if (vDotN < 0) {
+                            // Play sound on each bounce
+                            playTone(targetFreqs[t.id % targetFreqs.length]);
+                            
                             const j = -(1 + ELASTICITY) * vDotN;
                             ball.vx += j * nx;
                             ball.vy += j * ny;
