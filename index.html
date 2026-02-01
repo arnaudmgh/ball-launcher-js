@@ -158,6 +158,7 @@
         let lastTime = 0;
         let stepCount = 0;
         let showGuide = false;
+        let aiSolutionActive = false;
         const MAX_STEPS = 500;
 
         // Keys
@@ -227,7 +228,9 @@
             totalReward = 0;
             stepCount = 0;
             scoreDiv.style.display = 'none';
-            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}°`;
+            if (!aiSolutionActive) {
+                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}°`;
+            }
         }
 
         function updatePhysics() {
@@ -325,14 +328,16 @@
             const vStep = shift ? 1.0 : 10.0;
             const aStep = shift ? 0.002 : 0.01;
 
-            if (keys.ArrowUp) velocity = Math.min(MAX_VELOCITY, velocity + vStep);
-            if (keys.ArrowDown) velocity = Math.max(MIN_VELOCITY, velocity - vStep);
+            if (keys.ArrowUp) { velocity = Math.min(MAX_VELOCITY, velocity + vStep); aiSolutionActive = false; }
+            if (keys.ArrowDown) { velocity = Math.max(MIN_VELOCITY, velocity - vStep); aiSolutionActive = false; }
 
-            if (keys.ArrowLeft) angle = Math.min(Math.PI - 0.1, angle + aStep);
-            if (keys.ArrowRight) angle = Math.max(0.1, angle - aStep);
+            if (keys.ArrowLeft) { angle = Math.min(Math.PI - 0.1, angle + aStep); aiSolutionActive = false; }
+            if (keys.ArrowRight) { angle = Math.max(0.1, angle - aStep); aiSolutionActive = false; }
 
             // Update UI text immediately
-            statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
+            if (!aiSolutionActive) {
+                statusDiv.textContent = `Velocity: ${velocity.toFixed(1)} | Angle: ${(angle * 180 / Math.PI).toFixed(1)}° ${shift ? '[FINE]' : ''}`;
+            }
         }
 
         // --- Render ---
@@ -612,6 +617,7 @@
 
             velocity = bestV;
             angle = bestA;
+            aiSolutionActive = true;
             statusDiv.textContent = `AI Solution: Vel ${velocity.toFixed(1)} | Ang ${(angle * 180 / Math.PI).toFixed(1)}° | Score ${bestR.toFixed(1)}`;
         }
 
