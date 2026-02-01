@@ -34,7 +34,8 @@
         }
 
         #targetCount,
-        #cemBtn {
+        #cemBtn,
+        #guideBtn {
             pointer-events: auto;
         }
 
@@ -88,6 +89,9 @@
         <button id="cemBtn"
             style="margin-top: 10px; display: block; width: 100%; background: #4477aa; color: #fff; border: none; padding: 8px; border-radius: 3px; cursor: pointer; font-weight: bold;">Generate
             Solution</button>
+        <button id="guideBtn"
+            style="margin-top: 5px; display: block; width: 100%; background: #666; color: #fff; border: none; padding: 8px; border-radius: 3px; cursor: pointer;">Show
+            Guide</button>
     </div>
     <div id="score">Score: 0.0</div>
     <div id="status">Ready</div>
@@ -153,6 +157,7 @@
         let totalReward = 0;
         let lastTime = 0;
         let stepCount = 0;
+        let showGuide = false;
         const MAX_STEPS = 500;
 
         // Keys
@@ -364,58 +369,79 @@
                 }
             });
 
+            // Draw Slingshot (only when not launched)
+            if (!launched) {
+                const sx = LOGICAL_WIDTH / 2;
+                const sy = LOGICAL_HEIGHT - 20;
+                const vRatio = (velocity - MIN_VELOCITY) / (MAX_VELOCITY - MIN_VELOCITY);
+
+                // Save context and rotate around ball position
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.rotate(-angle); // Rotate to match arrow direction
+
+                ctx.strokeStyle = "#555";
+                ctx.lineWidth = 4;
+                ctx.lineCap = "round";
+
+                // Arms of the Y (pointing forward, ball at intersection)
+                const armLength = 40 + vRatio * 20;
+                const armSpread = 0.4; // Angle spread of arms from center
+
+                // Left arm
+                ctx.beginPath();
+                ctx.moveTo(0, 0); // Ball position (intersection)
+                ctx.lineTo(armLength * Math.cos(armSpread), -armLength * Math.sin(armSpread));
+                ctx.stroke();
+
+                // Right arm
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(armLength * Math.cos(armSpread), armLength * Math.sin(armSpread));
+                ctx.stroke();
+
+                // Arm tips for elastic
+                const tipL = { x: armLength * Math.cos(armSpread), y: -armLength * Math.sin(armSpread) };
+                const tipR = { x: armLength * Math.cos(armSpread), y: armLength * Math.sin(armSpread) };
+
+                // Elastic String (stretched behind the ball)
+                const pullBack = -20 - vRatio * 30; // Negative = behind ball
+                const bandColor = `hsl(${120 - vRatio * 120}, 100%, 50%)`;
+                ctx.strokeStyle = bandColor;
+                ctx.lineWidth = 2 + vRatio * 4;
+                ctx.shadowBlur = 5 + vRatio * 10;
+                ctx.shadowColor = bandColor;
+
+                ctx.beginPath();
+                ctx.moveTo(tipL.x, tipL.y);
+                ctx.lineTo(pullBack, 0); // Elastic pulled back behind ball
+                ctx.lineTo(tipR.x, tipR.y);
+                ctx.stroke();
+
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            }
+
             // Draw Ball
             ctx.beginPath();
             ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
             ctx.fillStyle = "#fff";
             ctx.fill();
 
-            // Draw Arrow (if aiming)
-            if (!launched) {
-                const arrowLen = velocity * 0.15;
-                const endX = ball.x + arrowLen * Math.cos(angle);
-                const endY = ball.y - arrowLen * Math.sin(angle); // Screen Y is down, so minus
+            // Draw Guide Line (dotted, extends to edge of screen)
+            if (!launched && showGuide) {
+                const maxLen = Math.max(LOGICAL_WIDTH, LOGICAL_HEIGHT) * 2;
+                const endX = ball.x + maxLen * Math.cos(angle);
+                const endY = ball.y - maxLen * Math.sin(angle);
 
                 ctx.beginPath();
+                ctx.setLineDash([10, 10]);
                 ctx.moveTo(ball.x, ball.y);
                 ctx.lineTo(endX, endY);
-                ctx.strokeStyle = keys.Shift ? "#ffc864" : "#64ff64"; // Orange/Green
-                ctx.lineWidth = 4;
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+                ctx.lineWidth = 2;
                 ctx.stroke();
-
-                // Arrowhead
-                const headLen = 15;
-                const headAngle = 0.5;
-                const angleRad = -angle; // visual angle
-
-                // Manual geometry for arrowhead
-                // Vector d = (endX - startX, endY - startY) normalized
-                const dx = endX - ball.x;
-                const dy = endY - ball.y;
-                const len = Math.sqrt(dx * dx + dy * dy);
-                const udx = dx / len;
-                const udy = dy / len;
-
-                // Rotate u by +headAngle and -headAngle
-                // x' = x cos - y sin
-                // y' = x sin + y cos
-                const cosA = Math.cos(headAngle);
-                const sinA = Math.sin(headAngle);
-
-                // Left wing
-                const lx = endX - headLen * (udx * cosA - udy * sinA);
-                const ly = endY - headLen * (udx * sinA + udy * cosA);
-
-                // Right wing
-                const rx = endX - headLen * (udx * cosA + udy * sinA);
-                const ry = endY - headLen * (udx * -sinA + udy * cosA);
-
-                ctx.beginPath();
-                ctx.moveTo(endX, endY);
-                ctx.lineTo(lx, ly);
-                ctx.lineTo(rx, ry);
-                ctx.fillStyle = keys.Shift ? "#ffc864" : "#64ff64";
-                ctx.fill();
+                ctx.setLineDash([]);
             }
 
             ctx.restore();
@@ -591,6 +617,12 @@
 
         document.getElementById('cemBtn').addEventListener('click', (e) => {
             runCEM();
+            e.target.blur();
+        });
+
+        document.getElementById('guideBtn').addEventListener('click', (e) => {
+            showGuide = !showGuide;
+            e.target.textContent = showGuide ? 'Hide Guide' : 'Show Guide';
             e.target.blur();
         });
 
