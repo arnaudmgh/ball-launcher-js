@@ -39,6 +39,7 @@
         #cemVizToggleBtn,
         #cemPauseBtn,
         #cemStopBtn,
+        #cemContinueBtn,
         #cemIterSlider,
         #cemSpeed {
             pointer-events: auto;
@@ -68,7 +69,7 @@
             position: absolute;
             top: 10px;
             right: 10px;
-            width: 360px;
+            width: min(640px, calc(100vw - 20px));
             background: rgba(0, 0, 0, 0.75);
             border: 1px solid rgba(255, 255, 255, 0.12);
             border-radius: 8px;
@@ -94,7 +95,7 @@
 
         #cemCanvas {
             width: 100%;
-            height: 260px;
+            height: 420px;
             display: block;
             background: rgba(20, 20, 20, 0.9);
             border: 1px solid rgba(255, 255, 255, 0.12);
@@ -118,6 +119,11 @@
             cursor: pointer;
             font-weight: 600;
             font-size: 12px;
+        }
+
+        .cemBtn.primary {
+            background: #2f6fbb;
+            border-color: rgba(255, 255, 255, 0.18);
         }
 
         .cemBtn:disabled {
@@ -200,16 +206,19 @@
                 <option value="2">Slow</option>
             </select>
         </div>
-        <canvas id="cemCanvas" width="720" height="520"></canvas>
+        <canvas id="cemCanvas" width="1040" height="760"></canvas>
         <div class="cemRow">
             <button id="cemPauseBtn" class="cemBtn" title="Pause/Resume visualization" disabled>Pause</button>
+            <button id="cemContinueBtn" class="cemBtn primary" title="Continue searching for 40 more iterations"
+                disabled>+40 iters</button>
             <button id="cemStopBtn" class="cemBtn danger" title="Stop CEM" disabled>Stop</button>
         </div>
         <div class="cemRow" style="flex-direction: column; align-items: stretch; gap: 6px;">
             <input id="cemIterSlider" type="range" min="0" max="0" step="1" value="0" disabled />
             <div id="cemMeta">No CEM run yet.</div>
             <div id="cemLegend">
-                Samples are colored by reward (red→yellow→green). Elites are outlined. White cross = mean, white ellipse = 1σ (diagonal). Cyan dot = best-so-far.
+                Samples are colored by reward (red→yellow→green). Elites are outlined. White cross = mean, white ellipse
+                = 1σ (diagonal). Cyan dot = best-so-far.
             </div>
         </div>
     </div>
@@ -229,10 +238,23 @@
         const cemCanvas = document.getElementById('cemCanvas');
         const cemCtx = cemCanvas.getContext('2d');
         const cemPauseBtn = document.getElementById('cemPauseBtn');
+        const cemContinueBtn = document.getElementById('cemContinueBtn');
         const cemStopBtn = document.getElementById('cemStopBtn');
         const cemIterSlider = document.getElementById('cemIterSlider');
         const cemMeta = document.getElementById('cemMeta');
         const cemSpeed = document.getElementById('cemSpeed');
+
+        // --- Constants (moved up so they're available for CEM viz) ---
+        const LOGICAL_WIDTH = 800;
+        const LOGICAL_HEIGHT = 600;
+        const GRAVITY = 900;
+        const BALL_RADIUS = 10;
+        const MIN_VELOCITY = 100;
+        const MAX_VELOCITY = 1500;
+        const ELASTICITY = 0.8;
+        const DT = 1 / 60;
+        const SUBSTEPS = 5;
+        const MAX_STEPS = 500;
 
         const cemVizState = {
             visible: false,
@@ -241,7 +263,12 @@
             stopRequested: false,
             liveIndex: 0,
             showIndex: 0,
-            run: null
+            run: null,
+            landscape: {
+                canvas: null,
+                ctx: null,
+                configKey: null
+            }
         };
 
         function clamp(x, lo, hi) {
@@ -273,11 +300,11 @@
             cemVizState.run = {
                 createdAt: Date.now(),
                 iterations: [],
-                globalMinR: Infinity,
-                globalMaxR: -Infinity,
                 best: { v: 0, a: 0, r: -Infinity },
                 settings: null,
-                targetConfigs: null
+                targetConfigs: null,
+                configKey: null,
+                dist: null
             };
             cemVizState.liveIndex = 0;
             cemVizState.showIndex = 0;
@@ -289,49 +316,119 @@
             drawCem();
         }
 
+        function getTargetConfigKey(configs) {
+            return (configs || [])
+                .map(c => `${Math.round(c.x)}:${Math.round(c.y)}:${Math.round(c.r)}`)
+                .join('|');
+        }
+
+        function ensureLandscapeCanvas() {
+            if (!cemVizState.landscape.canvas) {
+                cemVizState.landscape.canvas = document.createElement('canvas');
+                cemVizState.landscape.ctx = cemVizState.landscape.canvas.getContext('2d');
+            }
+            if (cemVizState.landscape.canvas.width !== cemCanvas.width || cemVizState.landscape.canvas.height !== cemCanvas.height) {
+                cemVizState.landscape.canvas.width = cemCanvas.width;
+                cemVizState.landscape.canvas.height = cemCanvas.height;
+            }
+        }
+
+        function clearLandscapeIfConfigChanged(configs) {
+            ensureLandscapeCanvas();
+            const key = getTargetConfigKey(configs);
+            if (cemVizState.landscape.configKey !== key) {
+                cemVizState.landscape.configKey = key;
+                cemVizState.landscape.ctx.clearRect(0, 0, cemVizState.landscape.canvas.width, cemVizState.landscape.canvas.height);
+            }
+        }
+
         function setCemUiEnabledDuringRun(running) {
             cemPauseBtn.disabled = !running;
             cemStopBtn.disabled = !running;
+            cemContinueBtn.disabled = running || !(cemVizState.run && cemVizState.run.iterations.length > 0);
             cemIterSlider.disabled = running || !(cemVizState.run && cemVizState.run.iterations.length > 0);
             document.getElementById('cemBtn').disabled = running;
             targetCountSelect.disabled = running;
         }
 
-        function rewardToColor(r, minR, maxR) {
-            if (!isFinite(minR) || !isFinite(maxR) || minR === maxR) {
-                return 'hsl(60, 100%, 55%)';
-            }
+        function rewardToColor(r) {
+            const n = (cemVizState.run?.targetConfigs?.length || targets.length || numTargets || 3);
+            const minR = 0;
+            const maxR = 120 * n + 200;
             const t = clamp((r - minR) / (maxR - minR), 0, 1);
             const hue = 0 + 120 * t;
             return `hsl(${hue.toFixed(1)}, 90%, 55%)`;
         }
 
+        function getPlotGeom() {
+            const cw = cemCanvas.width;
+            const ch = cemCanvas.height;
+            const margin = { l: 64, r: 18, t: 18, b: 54 };
+            const pw = cw - margin.l - margin.r;
+            const ph = ch - margin.t - margin.b;
+            const aMin = 0.1;
+            const aMax = Math.PI - 0.1;
+            function toX(v) {
+                return margin.l + ((v - MIN_VELOCITY) / (MAX_VELOCITY - MIN_VELOCITY)) * pw;
+            }
+            function toY(a) {
+                return margin.t + ((aMax - a) / (aMax - aMin)) * ph;
+            }
+            return { cw, ch, margin, pw, ph, aMin, aMax, toX, toY };
+        }
+
+        function drawSamplesToLandscape(samples) {
+            ensureLandscapeCanvas();
+            const g = getPlotGeom();
+            const lctx = cemVizState.landscape.ctx;
+            lctx.save();
+            lctx.beginPath();
+            lctx.rect(g.margin.l, g.margin.t, g.pw, g.ph);
+            lctx.clip();
+            lctx.globalAlpha = 0.20;
+            for (const s of samples) {
+                const x = g.toX(s.v);
+                const y = g.toY(s.a);
+                lctx.beginPath();
+                lctx.arc(x, y, 3.4, 0, Math.PI * 2);
+                lctx.fillStyle = rewardToColor(s.r);
+                lctx.fill();
+            }
+            lctx.restore();
+        }
+
         function drawCem() {
             if (!cemVizState.visible) return;
 
-            const cw = cemCanvas.width;
-            const ch = cemCanvas.height;
+            const g = getPlotGeom();
+            const cw = g.cw;
+            const ch = g.ch;
             cemCtx.clearRect(0, 0, cw, ch);
 
             // Background
             cemCtx.fillStyle = 'rgba(18, 18, 18, 1)';
             cemCtx.fillRect(0, 0, cw, ch);
 
-            const margin = { l: 64, r: 18, t: 18, b: 54 };
-            const pw = cw - margin.l - margin.r;
-            const ph = ch - margin.t - margin.b;
+            // Draw accumulated landscape first (keeps previous solutions so the reward shape emerges)
+            ensureLandscapeCanvas();
+            cemCtx.save();
+            cemCtx.beginPath();
+            cemCtx.rect(g.margin.l, g.margin.t, g.pw, g.ph);
+            cemCtx.clip();
+            cemCtx.drawImage(cemVizState.landscape.canvas, 0, 0);
+            cemCtx.restore();
 
             // Axes box
             cemCtx.strokeStyle = 'rgba(255,255,255,0.18)';
             cemCtx.lineWidth = 2;
-            cemCtx.strokeRect(margin.l, margin.t, pw, ph);
+            cemCtx.strokeRect(g.margin.l, g.margin.t, g.pw, g.ph);
 
             // Axis labels
             cemCtx.fillStyle = 'rgba(255,255,255,0.72)';
             cemCtx.font = '16px Arial';
-            cemCtx.fillText('velocity', margin.l, ch - 18);
+            cemCtx.fillText('velocity', g.margin.l, ch - 18);
             cemCtx.save();
-            cemCtx.translate(20, margin.t + ph);
+            cemCtx.translate(20, g.margin.t + g.ph);
             cemCtx.rotate(-Math.PI / 2);
             cemCtx.fillText('angle', 0, 0);
             cemCtx.restore();
@@ -343,22 +440,22 @@
             cemCtx.fillStyle = 'rgba(255,255,255,0.55)';
             const vTicks = 5;
             for (let i = 0; i <= vTicks; i++) {
-                const x = margin.l + (i / vTicks) * pw;
+                const x = g.margin.l + (i / vTicks) * g.pw;
                 cemCtx.beginPath();
-                cemCtx.moveTo(x, margin.t + ph);
-                cemCtx.lineTo(x, margin.t + ph + 6);
+                cemCtx.moveTo(x, g.margin.t + g.ph);
+                cemCtx.lineTo(x, g.margin.t + g.ph + 6);
                 cemCtx.stroke();
                 const vVal = MIN_VELOCITY + (i / vTicks) * (MAX_VELOCITY - MIN_VELOCITY);
-                cemCtx.fillText(vVal.toFixed(0), x - 12, margin.t + ph + 22);
+                cemCtx.fillText(vVal.toFixed(0), x - 12, g.margin.t + g.ph + 22);
             }
-            const aMin = 0.1;
-            const aMax = Math.PI - 0.1;
+            const aMin = g.aMin;
+            const aMax = g.aMax;
             const aTicks = 4;
             for (let i = 0; i <= aTicks; i++) {
-                const y = margin.t + (i / aTicks) * ph;
+                const y = g.margin.t + (i / aTicks) * g.ph;
                 cemCtx.beginPath();
-                cemCtx.moveTo(margin.l - 6, y);
-                cemCtx.lineTo(margin.l, y);
+                cemCtx.moveTo(g.margin.l - 6, y);
+                cemCtx.lineTo(g.margin.l, y);
                 cemCtx.stroke();
                 const aVal = aMax - (i / aTicks) * (aMax - aMin);
                 cemCtx.fillText((aVal * 180 / Math.PI).toFixed(0) + '°', 8, y + 4);
@@ -367,7 +464,7 @@
             if (!cemVizState.run || cemVizState.run.iterations.length === 0) {
                 cemCtx.fillStyle = 'rgba(255,255,255,0.65)';
                 cemCtx.font = '18px Arial';
-                cemCtx.fillText('No data yet', margin.l + 12, margin.t + 32);
+                cemCtx.fillText('No data yet', g.margin.l + 12, g.margin.t + 32);
                 return;
             }
 
@@ -375,14 +472,8 @@
             const idx = clamp(cemVizState.showIndex, 0, iters.length - 1);
             const frame = iters[idx];
 
-            // Mapping functions
-            function toX(v) {
-                return margin.l + ((v - MIN_VELOCITY) / (MAX_VELOCITY - MIN_VELOCITY)) * pw;
-            }
-            function toY(a) {
-                // top = max angle
-                return margin.t + ((aMax - a) / (aMax - aMin)) * ph;
-            }
+            const toX = g.toX;
+            const toY = g.toY;
 
             // Mean trajectory trail
             cemCtx.strokeStyle = 'rgba(255,255,255,0.35)';
@@ -397,15 +488,12 @@
             }
             cemCtx.stroke();
 
-            // Draw samples
-            const minR = cemVizState.run.globalMinR;
-            const maxR = cemVizState.run.globalMaxR;
             for (const s of frame.samples) {
                 const x = toX(s.v);
                 const y = toY(s.a);
                 cemCtx.beginPath();
                 cemCtx.arc(x, y, 4, 0, Math.PI * 2);
-                cemCtx.fillStyle = rewardToColor(s.r, minR, maxR);
+                cemCtx.fillStyle = rewardToColor(s.r);
                 cemCtx.fill();
             }
 
@@ -423,8 +511,8 @@
             // 1σ ellipse (diagonal)
             const mx = toX(frame.meanV);
             const my = toY(frame.meanA);
-            const rx = Math.max(2, (frame.stdV / (MAX_VELOCITY - MIN_VELOCITY)) * pw);
-            const ry = Math.max(2, (frame.stdA / (aMax - aMin)) * ph);
+            const rx = Math.max(2, (frame.stdV / (MAX_VELOCITY - MIN_VELOCITY)) * g.pw);
+            const ry = Math.max(2, (frame.stdA / (aMax - aMin)) * g.ph);
             cemCtx.strokeStyle = 'rgba(255,255,255,0.65)';
             cemCtx.lineWidth = 2;
             cemCtx.beginPath();
@@ -456,7 +544,7 @@
             // Top-left info overlay
             cemCtx.fillStyle = 'rgba(255,255,255,0.85)';
             cemCtx.font = '14px Arial';
-            cemCtx.fillText(`iter ${idx + 1}/${iters.length}   best ${best.r.toFixed(1)}`, margin.l + 10, margin.t + 22);
+            cemCtx.fillText(`iter ${idx + 1}/${iters.length}   best ${best.r.toFixed(1)}`, g.margin.l + 10, g.margin.t + 22);
         }
 
         resetCemRun();
@@ -468,23 +556,6 @@
         }
         resizeBounds();
         window.addEventListener('resize', resizeBounds);
-
-        // --- Constants ---
-        // We stick to the python logic: 800x600 logical size, scaled up if needed.
-        // But for simplicity in JS, let's just use window coords or fixed logic.
-        // Let's us fixed logic logic but render centered.
-        const LOGICAL_WIDTH = 800;
-        const LOGICAL_HEIGHT = 600;
-
-        const GRAVITY = 900;
-        const BALL_RADIUS = 10;
-        const MIN_VELOCITY = 100;
-        const MAX_VELOCITY = 1500; // Match python buffer
-        const ELASTICITY = 0.8; // Bounciness of targets
-
-        // Sim parameters
-        const DT = 1 / 60;
-        const SUBSTEPS = 5;
 
         // --- Parse URL parameter for target count ---
         function getTargetCount() {
@@ -517,7 +588,6 @@
         let stepCount = 0;
         let showGuide = false;
         let aiSolutionActive = false;
-        const MAX_STEPS = 500;
 
         // Precision control system
         let precisionLevel = 1; // 1-4
@@ -639,7 +709,7 @@
                         // Only bounce if moving towards target
                         if (vDotN < 0) {
                             const impactVelocity = Math.abs(vDotN);
-                            
+
                             // Play sound only if impact is strong enough (> 10 units/sec)
                             if (impactVelocity > 10) {
                                 // Scale volume based on impact velocity
@@ -647,7 +717,7 @@
                                 const volume = Math.min(0.3, impactVelocity / 500);
                                 playTone(targetFreqs[t.id % targetFreqs.length], volume);
                             }
-                            
+
                             const j = -(1 + ELASTICITY) * vDotN;
                             ball.vx += j * nx;
                             ball.vy += j * ny;
@@ -957,133 +1027,177 @@
             return z0 * std + mean;
         }
 
-        async function runCEMAnimated() {
-            if (cemVizState.running) return;
-            cemVizState.running = true;
-            cemVizState.paused = false;
-            cemVizState.stopRequested = false;
+        async function runCEMAnimated({ continueFromPrevious = false, iterations = 40 } = {}) {
 
-            statusDiv.textContent = 'AI thinking... (CEM)';
-            setCemUiEnabledDuringRun(true);
+            console.log('runCEMAnimated called', { continueFromPrevious, iterations });
+            if (cemVizState.running) {
 
-            // Settings
-            const popSize = 100;
-            const eliteFrac = 0.1;
-            const iterations = 40;
-
-            let meanV = velocity;
-            let meanA = angle;
-            let stdV = 300;
-            let stdA = 0.4;
-
-            const configs = targets.map(t => ({ x: t.x, y: t.y, r: t.r }));
-
-            resetCemRun();
-            cemVizState.run.settings = { popSize, eliteFrac, iterations };
-            cemVizState.run.targetConfigs = configs;
-            cemVizState.showIndex = 0;
-
-            let bestR = -Infinity;
-            let bestV = meanV, bestA = meanA;
-
-            if (!cemVizState.visible) {
-                // Auto-open so the user sees what is happening.
-                setCemVizVisible(true);
+                console.log('Already running, returning');
+                return;
             }
 
-            for (let i = 0; i < iterations; i++) {
-                if (cemVizState.stopRequested) break;
-                while (cemVizState.paused && !cemVizState.stopRequested) {
-                    await sleep(50);
+            try {
+                cemVizState.running = true;
+                cemVizState.paused = false;
+                cemVizState.stopRequested = false;
+
+                statusDiv.textContent = 'AI thinking... (CEM)';
+                setCemUiEnabledDuringRun(true);
+
+                // Settings
+                const popSize = 100;
+                const eliteFrac = 0.1;
+                const configs = targets.map(t => ({ x: t.x, y: t.y, r: t.r }));
+                console.log('Target configs:', configs);
+
+                clearLandscapeIfConfigChanged(configs);
+                const configKey = getTargetConfigKey(configs);
+
+                let meanV, meanA, stdV, stdA;
+                let bestR, bestV, bestA;
+
+                if (
+                    continueFromPrevious &&
+                    cemVizState.run &&
+                    cemVizState.run.dist &&
+                    cemVizState.run.configKey === configKey
+                ) {
+                    ({ meanV, meanA, stdV, stdA } = cemVizState.run.dist);
+                    ({ v: bestV, a: bestA, r: bestR } = cemVizState.run.best);
+                } else {
+                    resetCemRun();
+                    cemVizState.run.settings = { popSize, eliteFrac };
+                    cemVizState.run.targetConfigs = configs;
+                    cemVizState.run.configKey = configKey;
+                    cemVizState.showIndex = 0;
+
+                    meanV = velocity;
+                    meanA = angle;
+                    stdV = 300;
+                    stdA = 0.4;
+
+                    bestR = -Infinity;
+                    bestV = meanV;
+                    bestA = meanA;
                 }
-                if (cemVizState.stopRequested) break;
 
-                let samples = [];
-                for (let p = 0; p < popSize; p++) {
-                    let v = gaussianRandom(meanV, stdV);
-                    let a = gaussianRandom(meanA, stdA);
-                    v = clamp(v, MIN_VELOCITY, MAX_VELOCITY);
-                    a = clamp(a, 0.1, Math.PI - 0.1);
-                    const r = simulate(v, a, configs);
-                    samples.push({ v, a, r });
+                if (!cemVizState.visible) {
+                    setCemVizVisible(true);
+                }
+                // Update UI to show we are starting
+                cemMeta.textContent = `Starting search... (0/${iterations})`;
+                await sleep(50); // Give UI a moment to render
+
+                for (let i = 0; i < iterations; i++) {
+                    console.log('CEM iteration', i, 'paused:', cemVizState.paused, 'stop:', cemVizState.stopRequested);
+                    if (cemVizState.stopRequested) break;
+                    while (cemVizState.paused && !cemVizState.stopRequested) {
+                        await sleep(50);
+                    }
+                    if (cemVizState.stopRequested) break;
+
+                    let samples = [];
+                    for (let p = 0; p < popSize; p++) {
+                        let v = gaussianRandom(meanV, stdV);
+                        let a = gaussianRandom(meanA, stdA);
+                        v = clamp(v, MIN_VELOCITY, MAX_VELOCITY);
+                        a = clamp(a, 0.1, Math.PI - 0.1);
+                        const r = simulate(v, a, configs);
+                        samples.push({ v, a, r });
+                        // Prevent UI freeze on slow machines
+                        if (p % 20 === 0) await sleep(0);
+                    }
+
+                    samples.sort((x, y) => y.r - x.r);
+                    const eliteCount = Math.max(1, Math.floor(popSize * eliteFrac));
+                    const elites = samples.slice(0, eliteCount);
+
+                    // Best-so-far
+                    if (elites[0].r > bestR) {
+                        bestR = elites[0].r;
+                        bestV = elites[0].v;
+                        bestA = elites[0].a;
+                    }
+
+                    // Update distribution from elites
+                    let sumV = 0, sumA = 0;
+                    elites.forEach(e => { sumV += e.v; sumA += e.a; });
+                    meanV = sumV / elites.length;
+                    meanA = sumA / elites.length;
+
+                    let varV = 0, varA = 0;
+                    elites.forEach(e => {
+                        varV += Math.pow(e.v - meanV, 2);
+                        varA += Math.pow(e.a - meanA, 2);
+                    });
+                    stdV = Math.sqrt(varV / elites.length) + 1;
+                    stdA = Math.sqrt(varA / elites.length) + 0.01;
+
+                    // Record for visualization
+                    cemVizState.run.best = { v: bestV, a: bestA, r: bestR };
+                    cemVizState.run.dist = { meanV, meanA, stdV, stdA };
+                    const iterIndex = cemVizState.run.iterations.length;
+                    cemVizState.run.iterations.push({
+                        iter: iterIndex,
+                        samples,
+                        elites,
+                        meanV,
+                        meanA,
+                        stdV,
+                        stdA,
+                        bestR
+                    });
+
+                    // Accumulate samples into the landscape buffer (do not erase between runs)
+                    drawSamplesToLandscape(samples);
+
+                    cemVizState.liveIndex = cemVizState.run.iterations.length - 1;
+                    cemVizState.showIndex = cemVizState.liveIndex;
+
+                    cemIterSlider.max = String(cemVizState.liveIndex);
+                    cemIterSlider.value = String(cemVizState.showIndex);
+
+                    cemMeta.textContent = `iter ${cemVizState.run.iterations.length} | elite=${eliteCount}/${popSize} | meanV=${meanV.toFixed(1)} stdV=${stdV.toFixed(1)} | meanA=${(meanA * 180 / Math.PI).toFixed(1)}° stdA=${(stdA * 180 / Math.PI).toFixed(2)}° | best=${bestR.toFixed(1)}`;
+                    drawCem();
+
+                    const delayMs = getVizDelayMs();
+                    if (delayMs > 0) await sleep(delayMs);
                 }
 
-                samples.sort((x, y) => y.r - x.r);
-                const eliteCount = Math.max(1, Math.floor(popSize * eliteFrac));
-                const elites = samples.slice(0, eliteCount);
+                // Apply best solution
+                velocity = bestV;
+                angle = bestA;
+                aiSolutionActive = true;
 
-                // Best-so-far
-                if (elites[0].r > bestR) {
-                    bestR = elites[0].r;
-                    bestV = elites[0].v;
-                    bestA = elites[0].a;
-                }
+                // cemVizState.running = false; // Moved to finally
+                // cemVizState.paused = false; // Moved to finally
+                // setCemUiEnabledDuringRun(false); // Moved to finally
 
-                // Update distribution from elites
-                let sumV = 0, sumA = 0;
-                elites.forEach(e => { sumV += e.v; sumA += e.a; });
-                meanV = sumV / elites.length;
-                meanA = sumA / elites.length;
-
-                let varV = 0, varA = 0;
-                elites.forEach(e => {
-                    varV += Math.pow(e.v - meanV, 2);
-                    varA += Math.pow(e.a - meanA, 2);
-                });
-                stdV = Math.sqrt(varV / elites.length) + 1;
-                stdA = Math.sqrt(varA / elites.length) + 0.01;
-
-                // Record for visualization
-                cemVizState.run.globalMinR = Math.min(cemVizState.run.globalMinR, samples[samples.length - 1].r);
-                cemVizState.run.globalMaxR = Math.max(cemVizState.run.globalMaxR, samples[0].r);
-                cemVizState.run.best = { v: bestV, a: bestA, r: bestR };
-                cemVizState.run.iterations.push({
-                    iter: i,
-                    samples,
-                    elites,
-                    meanV,
-                    meanA,
-                    stdV,
-                    stdA,
-                    bestR
-                });
-                cemVizState.liveIndex = cemVizState.run.iterations.length - 1;
-                cemVizState.showIndex = cemVizState.liveIndex;
-
-                cemIterSlider.max = String(cemVizState.liveIndex);
+                cemIterSlider.disabled = !(cemVizState.run && cemVizState.run.iterations.length > 0);
+                cemIterSlider.min = '0';
+                cemIterSlider.max = String(Math.max(0, (cemVizState.run?.iterations?.length || 1) - 1));
                 cemIterSlider.value = String(cemVizState.showIndex);
 
-                cemMeta.textContent = `iter ${i + 1}/${iterations} | elite=${eliteCount}/${popSize} | meanV=${meanV.toFixed(1)} stdV=${stdV.toFixed(1)} | meanA=${(meanA * 180 / Math.PI).toFixed(1)}° stdA=${(stdA * 180 / Math.PI).toFixed(2)}° | best=${bestR.toFixed(1)}`;
-                drawCem();
-
-                const delayMs = getVizDelayMs();
-                if (delayMs > 0) await sleep(delayMs);
+                if (cemVizState.stopRequested) {
+                    statusDiv.textContent = `CEM stopped. Best-so-far: Vel ${velocity.toFixed(1)} | Ang ${(angle * 180 / Math.PI).toFixed(1)}° | Score ${bestR.toFixed(1)}`;
+                } else {
+                    statusDiv.textContent = `AI Solution: Vel ${velocity.toFixed(1)} | Ang ${(angle * 180 / Math.PI).toFixed(1)}° | Score ${bestR.toFixed(1)}`;
+                }
+                cemPauseBtn.textContent = 'Pause';
+                cemMeta.textContent = `done | best=${bestR.toFixed(1)} | use “+40 iters” to keep searching`;
+            } catch (err) {
+                console.error('CEM Error:', err);
+                cemMeta.textContent = `Error: ${err.message}`;
+                alert(`Error running CEM: ${err.message}`);
+            } finally {
+                cemVizState.running = false;
+                cemVizState.paused = false;
+                setCemUiEnabledDuringRun(false);
             }
-
-            // Apply best solution
-            velocity = bestV;
-            angle = bestA;
-            aiSolutionActive = true;
-
-            cemVizState.running = false;
-            cemVizState.paused = false;
-            setCemUiEnabledDuringRun(false);
-
-            cemIterSlider.disabled = !(cemVizState.run && cemVizState.run.iterations.length > 0);
-            cemIterSlider.min = '0';
-            cemIterSlider.max = String(Math.max(0, (cemVizState.run?.iterations?.length || 1) - 1));
-            cemIterSlider.value = String(cemVizState.showIndex);
-
-            if (cemVizState.stopRequested) {
-                statusDiv.textContent = `CEM stopped. Best-so-far: Vel ${velocity.toFixed(1)} | Ang ${(angle * 180 / Math.PI).toFixed(1)}° | Score ${bestR.toFixed(1)}`;
-            } else {
-                statusDiv.textContent = `AI Solution: Vel ${velocity.toFixed(1)} | Ang ${(angle * 180 / Math.PI).toFixed(1)}° | Score ${bestR.toFixed(1)}`;
-            }
-            cemPauseBtn.textContent = 'Pause';
-            cemMeta.textContent = `done | best=${bestR.toFixed(1)} | scrub iterations to inspect elites/grooves`;
         }
 
         document.getElementById('cemBtn').addEventListener('click', async (e) => {
+
             await runCEM();
             e.target.blur();
         });
@@ -1097,7 +1211,16 @@
             if (!cemVizState.running) return;
             cemVizState.paused = !cemVizState.paused;
             cemPauseBtn.textContent = cemVizState.paused ? 'Resume' : 'Pause';
-            cemMeta.textContent = cemVizState.paused ? 'paused — distribution update is waiting' : cemMeta.textContent;
+            if (cemVizState.paused) {
+                cemMeta.textContent = 'paused — click Resume to continue';
+            }
+            e.target.blur();
+        });
+
+        cemContinueBtn.addEventListener('click', async (e) => {
+            if (cemVizState.running) return;
+            if (!cemVizState.run || !cemVizState.run.iterations || cemVizState.run.iterations.length === 0) return;
+            await runCEMAnimated({ continueFromPrevious: true, iterations: 40 });
             e.target.blur();
         });
 
@@ -1126,6 +1249,7 @@
         });
 
         // Start
+        cemVizState.running = false; // Ensure clean state on load
         initTargets();
         requestAnimationFrame(loop);
 
