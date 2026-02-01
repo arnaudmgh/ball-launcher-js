@@ -174,13 +174,13 @@
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContext();
 
-        function playTone(freq) {
+        function playTone(freq, volume = 0.3) {
             if (audioCtx.state === 'suspended') audioCtx.resume();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             osc.type = 'sine';
             osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.setValueAtTime(volume, audioCtx.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
             osc.connect(gain);
             gain.connect(audioCtx.destination);
@@ -276,8 +276,15 @@
 
                         // Only bounce if moving towards target
                         if (vDotN < 0) {
-                            // Play sound on each bounce
-                            playTone(targetFreqs[t.id % targetFreqs.length]);
+                            const impactVelocity = Math.abs(vDotN);
+                            
+                            // Play sound only if impact is strong enough (> 10 units/sec)
+                            if (impactVelocity > 10) {
+                                // Scale volume based on impact velocity
+                                // Quiet for gentle bounces, loud for hard impacts
+                                const volume = Math.min(0.3, impactVelocity / 500);
+                                playTone(targetFreqs[t.id % targetFreqs.length], volume);
+                            }
                             
                             const j = -(1 + ELASTICITY) * vDotN;
                             ball.vx += j * nx;
